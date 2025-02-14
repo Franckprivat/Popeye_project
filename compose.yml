@@ -1,0 +1,95 @@
+version: "3.8"
+
+services:
+  poll:
+    build: ./poll
+    ports:
+      - "5000:80"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - poll-tier
+    environment:
+      REDIS_HOST: redis
+    restart: on-failure
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - poll-tier
+      - back-tier
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: on-failure
+
+  worker:
+    build: ./worker
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    networks:
+      - back-tier
+    environment:
+      REDIS_HOST: redis
+      POSTGRES_HOST: db
+      POSTGRES_DB: votes
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_PORT: 5432
+    restart: on-failure
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: votes
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - .db-init/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    networks:
+      - back-tier
+      - result-tier
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d votes"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: on-failure
+
+  result:
+    build:
+      context: ./result
+      dockerfile: Dockerfile
+      # exclude:
+      #   - node_modules
+    ports:
+      - "5001:80"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - result-tier
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: votes
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_PORT: 5432
+    restart: on-failure
+
+networks:
+  poll-tier:
+  result-tier:
+  back-tier:
+
+volumes:
+  db-data:
